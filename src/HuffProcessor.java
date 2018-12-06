@@ -1,3 +1,5 @@
+import java.util.*;
+
 /**
  * Although this class has a history of several years, it is starting from a
  * blank-slate, new and clean implementation as of Fall 2018.
@@ -37,17 +39,181 @@ public class HuffProcessor {
 	 * @param out Buffered bit stream writing to the output file.
 	 */
 	public void compress(BitInputStream in, BitOutputStream out) {
-		while (true) {
-			int val = in.readBits(BITS_PER_WORD);
+		int[] counts = readForCounts(in);
+		HuffNode root = makeTreeFromCounts(counts);
+		String[] codings = makeCodingsFromTree(root);
 
-			if (val == -1) {
+		out.writeBits(BITS_PER_INT, HUFF_TREE);
+		writeHeader(root, out);
+
+		in.reset();
+
+		writeCompressedBits(codings, in, out);
+
+		out.close();
+	}
+
+	/**
+	 * Determines the frequency of every 8-bit chunk in a file.
+	 * 
+	 * @param in file stream
+	 * @return array of frequencies for each character
+	 */
+	private int[] readForCounts(BitInputStream in) {
+		int[] result = new int[ALPH_SIZE + 1];	// 257
+
+		for (int i = 0; i < result.length; i++) {
+			result[i] = 0;
+		}
+
+		// Stop when we reach -1
+		while (true) {
+			int bits = in.readBits(BITS_PER_WORD);
+			
+			if (bits == -1) {
 				break;
 			}
 
-			out.writeBits(BITS_PER_WORD, val);
+			result[bits]++;
 		}
 
-		out.close();
+		// Indicate that there is one occurrence of PSEUDO_EOF
+		result[PSEUDO_EOF] = 1;
+
+		return result;
+	}
+
+	/**
+	 * Creates a Huffman Tree from frequency counts of bytes.
+	 * 
+	 * @param counts frequency of each byte in the file
+	 * @return the root node of the new tree
+	 */
+	private HuffNode makeTreeFromCounts(int[] counts) {
+		PriorityQueue<HuffNode> pq = new PriorityQueue<>();
+
+		// Set up the priority queue
+		for (int i = 0; i < counts.length; i++) {
+			if (counts[i] > 0) {	// Skip chars that don't appear
+				pq.add(new HuffNode(i, counts[i], null, null));
+			}
+		}
+
+		// Add nodes to tree in order of weight
+		while (pq.size() > 1) {
+			HuffNode left = pq.remove();
+			HuffNode right = pq.remove();
+
+			HuffNode t = new HuffNode(
+				0, 	// Value
+				left.myWeight + right.myWeight, 	// Weight
+				left, 	// Subtrees
+				right
+			);
+
+			pq.add(t);
+		}
+
+		HuffNode root = pq.remove();
+
+		return root;
+	}
+
+	/**
+	 * Creates codings for each byte using a Huffman tree.
+	 * 
+	 * @param root root of the Huffman tree to use
+	 * @return Huffman encoding for every byte
+	 */
+	private String[] makeCodingsFromTree(HuffNode root) {
+		String[] encodings = new String[ALPH_SIZE + 1];
+
+		// *Spongebob meme*
+		// ~~ rEcUrSiOn iS uSeFuL ~~
+		codingsHelper(root, "", encodings);
+
+		return encodings;
+	}
+
+	/**
+	 * Recursive helper method for `makeCodingsFromTree()`.
+	 * 
+	 * @param root root of the tree
+	 * @param path current path to leaf
+	 * @param encodings array of encodings for every byte
+	 */
+	private void codingsHelper(HuffNode root, String path, String[] encodings) {
+		// If root is leaf, add encoding value for the leaf's value
+		if (root.myLeft == null && root.myRight == null) {
+			encodings[root.myValue] = path;
+			return;
+		} else {
+			// Explore left path if possible
+			if (root.myLeft instanceof HuffNode) {
+				codingsHelper(root.myLeft, path + "0", encodings);
+			}
+
+			// Explore right path if possible
+			if (root.myRight instanceof HuffNode) {
+				codingsHelper(root.myRight, path + "1", encodings);
+			}
+		}
+	}
+
+	/**
+	 * Write a Huffman tree as a file header.
+	 * 
+	 * @param root root node of the Huffman tree
+	 * @param out output file stream
+	 */
+	private void writeHeader(HuffNode root, BitOutputStream out) {
+		// If leaf node --> Write single bit 1, then value of node
+		if (root.myLeft == null && root.myRight == null) {
+			out.writeBits(1, 1);	// Leaf node
+			out.writeBits(BITS_PER_WORD + 1, root.myValue);	// 9 bits
+		} else {	// Internal --> write single bit 0, then recurse
+			out.writeBits(1, 0);	// Internal node
+
+			// Write left subtree, if possible
+			if (root.myLeft instanceof HuffNode) {
+				writeHeader(root.myLeft, out);
+			}
+
+			// Write right subtree, if possible
+			if (root.myRight instanceof HuffNode) {
+				writeHeader(root.myRight, out);
+			}
+		}
+	}
+
+	/**
+	 * Write the compressed bits to an output file.
+	 * 
+	 * @param codings Huffman codings for each byte
+	 * @param in input (uncompressed) file stream
+	 * @param out target (compressed) file stream
+	 */
+	private void writeCompressedBits(String[] codings, BitInputStream in, BitOutputStream out) {
+		while (true) {
+			int bits = in.readBits(BITS_PER_WORD);	// 8
+			
+			// if file is done, write out an encoded EOF
+			if (bits == -1) {
+				String coded = codings[PSEUDO_EOF];
+				out.writeBits(coded.length(), Integer.parseInt(coded, 2));
+
+				break;
+			}
+
+			// Encode the bits
+			String coded = codings[bits];
+
+			// Convert the encoded value to a bit string
+			int codedBits = Integer.parseInt(coded, 2);	// base 2
+
+			// Write the encoded value as a bit string
+			out.writeBits(coded.length(), codedBits);
+		}
 	}
 
 	/**
@@ -66,6 +232,8 @@ public class HuffProcessor {
 
 		// Read the tree header
 		HuffNode root = readTreeHeader(in);
+
+		System.out.println("Done reading tree header.");
 
 		// Process the bits and write them out
 		decompressBits(in, out, root);
@@ -94,7 +262,7 @@ public class HuffProcessor {
 			return new HuffNode(0, 0, left, right);
 		} else {	// Leaf --> Read value
 			// Read nine bits from input
-			int value = in.readBits(BITS_PER_WORD);
+			int value = in.readBits(BITS_PER_WORD + 1);	// 9
 			return new HuffNode(value, 0, null, null);
 		}
 	}
@@ -109,25 +277,33 @@ public class HuffProcessor {
 		HuffNode current = root;
 
 		while (true) {
+			System.out.println("Reading next bit...");
+
 			// Read next bit
 			int bits = in.readBits(1);
+
+			System.out.println("Bit is " + bits);
 
 			if (bits == -1) {
 				throw new HuffException("bad input, no PSEUDO_EOF");
 			} else {
 				if (bits == 0) {
+					System.out.println("Takling left path");
 					current = current.myLeft;
 				} else {
+					System.out.println("Taking right path");
 					current = current.myRight;
 				}
 
 				// If current is a leaf node...
 				if (current.myLeft == null && current.myRight == null) {
+					System.out.println("Is a leaf");
 					if (current.myValue == PSEUDO_EOF) {
 						break;	// Stop processing
 					} else {
 						// Write bits for current value
-						out.write(current.myValue);
+						System.out.println("Writing: " + current.myValue);
+						out.writeBits(BITS_PER_WORD, current.myValue);	// 8 bits
 						current = root;
 					}
 				}
