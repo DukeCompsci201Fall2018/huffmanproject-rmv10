@@ -33,24 +33,51 @@ public class HuffProcessor {
 	}
 
 	/**
+	 * @author Radu Vasilescu
+	 */
+	private void debug(int level, Runnable action) {
+		if (myDebugLevel >= level) {
+			action.run();
+		}
+	}
+
+	/**
 	 * Compresses a file. Process must be reversible and loss-less.
 	 *
 	 * @param in  Buffered bit stream of the file to be compressed.
 	 * @param out Buffered bit stream writing to the output file.
 	 */
 	public void compress(BitInputStream in, BitOutputStream out) {
+
+		debug(DEBUG_HIGH, () -> System.out.println("  Compression started"));
+
+		debug(DEBUG_LOW, () -> System.out.println("Reading for counts"));
 		int[] counts = readForCounts(in);
+
+		debug(DEBUG_HIGH, () -> System.out.println("  counts[]: " + Arrays.toString(counts)));
+
+		debug(DEBUG_LOW, () -> System.out.println("Making tree from counts"));
 		HuffNode root = makeTreeFromCounts(counts);
+
+		debug(DEBUG_LOW, () -> System.out.println("Making codings from tree"));
 		String[] codings = makeCodingsFromTree(root);
 
+		debug(DEBUG_LOW, () -> System.out.println("Writing magic number"));
 		out.writeBits(BITS_PER_INT, HUFF_TREE);
+
+		debug(DEBUG_LOW, () -> System.out.println("Writing header"));
 		writeHeader(root, out);
 
+		debug(DEBUG_HIGH, () -> System.out.println("  Resetting input stream"));
 		in.reset();
 
+		debug(DEBUG_LOW, () -> System.out.println("Writing compressed bits"));
 		writeCompressedBits(codings, in, out);
 
+		debug(DEBUG_HIGH, () -> System.out.println("  Closing output stream"));
 		out.close();
+
+		debug(DEBUG_HIGH, () -> System.out.println("  Compression ending"));
 	}
 
 	/**
